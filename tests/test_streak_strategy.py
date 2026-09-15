@@ -28,16 +28,20 @@ def c(i: int, o: float, h: float, l: float, close: float) -> Candle:
     return Candle(1_700_000_000_000 + i * 60_000, o, h, l, close, 1.0)
 
 
-def test_bull_streak_arms_then_failure_confirms_short(monkeypatch):
-    strategy = StreakFailureReversalStrategy(cfg(monkeypatch))
-    state = RuntimeState(strategy="streak_failure")
-    candles = [
+def streak_fixture() -> list[Candle]:
+    return [
         c(0, 100, 101, 98, 99),
-        c(1, 99, 101, 98, 100),
+        c(1, 99, 100, 98, 99),
         c(2, 100, 102, 99, 101),
         c(3, 101, 103, 100, 102),
         c(4, 102, 104, 101, 103),
     ]
+
+
+def test_bull_streak_arms_then_failure_confirms_short(monkeypatch):
+    strategy = StreakFailureReversalStrategy(cfg(monkeypatch))
+    state = RuntimeState(strategy="streak_failure")
+    candles = streak_fixture()
 
     for i in range(3, 6):
         decision = strategy.evaluate(candles[:i], state, True)
@@ -61,13 +65,7 @@ def test_bull_streak_arms_then_failure_confirms_short(monkeypatch):
 def test_wick_only_does_not_confirm(monkeypatch):
     strategy = StreakFailureReversalStrategy(cfg(monkeypatch))
     state = RuntimeState(strategy="streak_failure")
-    candles = [
-        c(0, 100, 101, 98, 99),
-        c(1, 99, 101, 98, 100),
-        c(2, 100, 102, 99, 101),
-        c(3, 101, 103, 100, 102),
-        c(4, 102, 104, 101, 103),
-    ]
+    candles = streak_fixture()
     for i in range(3, 6):
         strategy.evaluate(candles[:i], state, True)
     wick_break = c(5, 103, 103.5, 100, 101.5)
