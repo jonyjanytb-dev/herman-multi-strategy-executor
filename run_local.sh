@@ -14,4 +14,9 @@ if [ ! -f .env ]; then
   echo "已创建 .env（默认 DRY_RUN=true）"
 fi
 
+# One shared .env is used by both strategies. If the new project has missing or
+# malformed local credentials and the previous executor exists on this Mac,
+# repair them locally without printing any secret value.
+./.venv/bin/python -m app.credentials
+
 exec ./.venv/bin/python terminal.py
