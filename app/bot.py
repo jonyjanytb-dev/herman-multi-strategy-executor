@@ -63,10 +63,18 @@ class TradingBot:
             return str(resp.get("response") or resp)
         return None
 
-    def _wait_for_position(self) -> object:
+    def _wait_for_open_position(self) -> object:
         deadline = time.monotonic() + self.cfg.entry_position_wait_seconds
         last = self.executor.position()
         while last.flat and time.monotonic() < deadline:
+            time.sleep(0.25)
+            last = self.executor.position()
+        return last
+
+    def _wait_for_flat_position(self) -> object:
+        deadline = time.monotonic() + self.cfg.entry_position_wait_seconds
+        last = self.executor.position()
+        while not last.flat and time.monotonic() < deadline:
             time.sleep(0.25)
             last = self.executor.position()
         return last
@@ -124,8 +132,9 @@ class TradingBot:
     def _verify_known_protection(self, candles, pos) -> None:
         if pos.flat or self.state.active_side == 0:
             return
-        if self.state.sl_order_oid is not None and self.state.tp_order_oid is not None:
-            return
+        # Verify exchange-side protection on every newly closed candle instead
+        # of trusting locally cached order ids. Manual cancellation or a stale
+        # exchange oid must be detected before the strategy takes more actions.
         tp_oid, tp_px, sl_oid, sl_px = self.executor.recover_protection()
         if sl_px is None:
             raise RuntimeError(
@@ -153,7 +162,7 @@ class TradingBot:
         error = self._response_error(resp)
         if error:
             raise RuntimeError(f"Hard-flat close failed: {error}")
-        pos = self._wait_for_position()
+        pos = self._wait_for_flat_position()
         if not pos.flat:
             raise RuntimeError("Hard-flat close returned but live position is still open")
         self.executor.cancel_all_protection()
@@ -202,7 +211,7 @@ class TradingBot:
         if error:
             raise RuntimeError(f"Entry rejected: {error}")
 
-        pos = self._wait_for_position()
+        pos = self._wait_for_open_position()
         if pos.flat:
             raise RuntimeError("Entry response returned but no live position was found within the wait window")
         fill = pos.entry_px if pos.entry_px is not None else signal.entry_reference
@@ -215,7 +224,7 @@ class TradingBot:
             close_error = self._response_error(close_resp)
             if close_error:
                 raise RuntimeError(f"Emergency invalid-protection close failed: {close_error}")
-            after_close = self._wait_for_position()
+            after_close = self._wait_for_flat_position()
             if not after_close.flat:
                 raise RuntimeError("Emergency invalid-protection close returned but position is still open")
             raise
