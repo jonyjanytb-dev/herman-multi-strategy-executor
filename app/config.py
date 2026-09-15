@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
+from .credentials import valid_eth_address, valid_private_key
+
 DEFAULT_OKX_INST_ID = "US100-USDT-SWAP"
 
 
@@ -186,8 +188,13 @@ class Config:
                 raise ValueError("NETWORK must be mainnet or testnet")
             if ":" not in self.coin or not self.coin.startswith(self.dex + ":"):
                 raise ValueError("COIN must use HIP-3 prefixed form, e.g. xyz:XYZ100")
-            if not self.dry_run and (not self.account_address or not self.api_private_key):
-                raise ValueError("ACCOUNT_ADDRESS and API_PRIVATE_KEY required when LIVE")
+            if not self.dry_run:
+                if not self.account_address or not self.api_private_key:
+                    raise ValueError("ACCOUNT_ADDRESS and API_PRIVATE_KEY required when LIVE")
+                if not valid_eth_address(self.account_address):
+                    raise ValueError("ACCOUNT_ADDRESS 格式错误：必须是 0x 开头的 40 位十六进制地址")
+                if not valid_private_key(self.api_private_key):
+                    raise ValueError("API_PRIVATE_KEY 格式错误：必须是 32-byte 十六进制私钥，可带 0x 前缀")
         else:
             if not self.okx_inst_id.endswith("-SWAP"):
                 raise ValueError("OKX_INST_ID must end in -SWAP")
