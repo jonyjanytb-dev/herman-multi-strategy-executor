@@ -6,6 +6,7 @@ from typing import Callable, Optional
 
 import requests
 
+from .lighter_client import LighterPublicClient
 from .models import Candle
 from .okx_client import OKXClient
 
@@ -120,5 +121,31 @@ class OKXMarketData:
         self._cache = sorted(merged.values(), key=lambda x: x.t)[-count:]
         expected = (bucket - 1) * MINUTE_MS
         if self._cache and self._cache[-1].t >= expected:
+            self._last_success_minute = bucket
+        return self._cache[-count:]
+
+
+class LighterMarketData:
+    def __init__(self, profile: str, symbol: str, interval: str = "1m", client: Optional[LighterPublicClient] = None):
+        if interval != "1m":
+            raise ValueError("LighterMarketData currently supports 1m only")
+        self.profile = profile
+        self.symbol = symbol.upper()
+        self.interval = interval
+        self.client = client or LighterPublicClient(profile=profile, symbol=self.symbol)
+        self._cache: list[Candle] = []
+        self._last_success_minute: Optional[int] = None
+
+    def fetch_recent(self, count: int = 500) -> list[Candle]:
+        now = int(time.time() * 1000)
+        bucket = now // MINUTE_MS
+        if self._cache and self._last_success_minute == bucket and len(self._cache) >= min(count, len(self._cache)):
+            return self._cache[-count:]
+
+        # Strategy 1.2 may request ~3000 bars. Lighter's public API is paged
+        # internally by LighterPublicClient in 500-candle windows.
+        fresh = self.client.candles(count=count, resolution=self.interval, now_ms=now)
+        if fresh:
+            self._cache = fresh[-count:]
             self._last_success_minute = bucket
         return self._cache[-count:]
