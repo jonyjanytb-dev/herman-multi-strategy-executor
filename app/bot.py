@@ -8,7 +8,7 @@ from typing import Optional
 
 from .config import Config
 from .executor import DryRunExecutor, build_executor
-from .market_data import HyperliquidMarketData, OKXMarketData
+from .market_data import HyperliquidMarketData, LighterMarketData, OKXMarketData
 from .models import RuntimeState, Signal
 from .state import StateStore
 from .strategy import build_strategy
@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 def build_market_data(cfg: Config):
     if cfg.exchange == "okx":
         return OKXMarketData(cfg.okx_inst_id, cfg.interval, base_url=cfg.okx_base_url)
+    if cfg.exchange == "lighter":
+        return LighterMarketData(cfg.lighter_profile, cfg.lighter_symbol, cfg.interval)
     return HyperliquidMarketData(cfg.network, cfg.coin, cfg.interval)
 
 
