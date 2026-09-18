@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.config import Config
 from app.models import RuntimeState
-from app.strategy import StreakFailureReversalStrategy, TrendRebalanceStrategy, build_strategy
+from app.strategy import AWLiquidityReversalStrategy, StreakFailureReversalStrategy, TrendRebalanceStrategy, build_strategy
 
 
 def base_env(monkeypatch):
@@ -28,6 +28,14 @@ def test_selects_streak_strategy(monkeypatch):
     cfg = Config.load()
     assert isinstance(build_strategy(cfg), StreakFailureReversalStrategy)
     assert cfg.state_path.endswith("state-hyperliquid-streak_failure.json")
+
+
+def test_selects_aw_strategy(monkeypatch):
+    base_env(monkeypatch)
+    monkeypatch.setenv("STRATEGY", "aw_liquidity")
+    cfg = Config.load()
+    assert isinstance(build_strategy(cfg), AWLiquidityReversalStrategy)
+    assert cfg.state_path.endswith("state-hyperliquid-aw_liquidity.json")
 
 
 def test_runtime_state_rejects_cross_strategy_reuse():
