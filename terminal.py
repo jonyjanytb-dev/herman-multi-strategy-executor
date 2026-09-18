@@ -49,7 +49,12 @@ def strategy_name(cfg: dict[str, str]) -> str:
 
 
 def strategy_label(cfg: dict[str, str]) -> str:
-    return "1.1 Streak Failure Reversal" if strategy_name(cfg) == "streak_failure" else "1.0 Trend Rebalance Map"
+    labels = {
+        "trend_rebalance": "1.0 Trend Rebalance Map",
+        "streak_failure": "1.1 Streak Failure Reversal",
+        "aw_liquidity": "1.2 AW Liquidity Reversal",
+    }
+    return labels.get(strategy_name(cfg), "1.0 Trend Rebalance Map")
 
 
 def exchange_name(cfg: dict[str, str]) -> str:
@@ -89,14 +94,20 @@ def show_status() -> None:
     print(f" 每笔名义仓位: {notional:.2f}")
     print(f" 杠杆        : {lev}x" if lev > 0 else " 杠杆        : 不自动修改")
     print(f" 做多 / 做空 : {cfg.get('ENABLE_LONGS','true')} / {cfg.get('ENABLE_SHORTS','true')}")
-    if strategy_name(cfg) == "trend_rebalance":
+    current_strategy = strategy_name(cfg)
+    if current_strategy == "trend_rebalance":
         print(f" 逻辑        : SMA50/SMA200 回归 | sep>{cfg.get('TREND_MIN_SEPARATION','30')} points")
         print(f" TP / SL     : {cfg.get('TREND_TP_MODE','200 SMA')} / {cfg.get('TREND_SL_MODE','Fixed Points')}")
-    else:
+    elif current_strategy == "streak_failure":
         print(f" 逻辑        : {cfg.get('STREAK_LENGTH','5')} 根 streak → failure confirmation")
         print(f" 信号周期    : {cfg.get('STREAK_SIGNAL_TIMEFRAME','1m')} | window={cfg.get('STREAK_WAIT_BARS','15')}")
         print(f" Session     : {cfg.get('STREAK_SESSION_START','09:45')}–{cfg.get('STREAK_SESSION_END','12:00')} New York")
         print(f" TP / SL     : {cfg.get('STREAK_TP_MODE','r_multiple')} / {cfg.get('STREAK_SL_MODE','terminal')}")
+    else:
+        print(f" 逻辑        : liquidity sweep → shift → FVG entry")
+        print(f" Swing / HTF : {cfg.get('AW_SWING_LENGTH','3')} / {cfg.get('AW_HTF_MINUTES','15')}m")
+        print(f" Session     : Asia+London+NY AM (NY PM={cfg.get('AW_USE_NYPM','false')})")
+        print(f" TP / SL     : {cfg.get('AW_TARGET_MODE','opposite_liquidity')} / swept liquidity")
     if exchange_name(cfg) == "hyperliquid":
         print(f" 主账户      : {mask(cfg.get('ACCOUNT_ADDRESS',''))}")
         print(f" API Wallet  : {'已设置' if cfg.get('API_PRIVATE_KEY') else '未设置'}")
@@ -108,14 +119,15 @@ def show_status() -> None:
 
 def configure_strategy() -> None:
     cfg = read_env()
-    print("\n1) 1.0 Trend Rebalance Map   - SMA 拉伸后的均值回归")
+    print("\n1) 1.0 Trend Rebalance Map     - SMA 拉伸后的均值回归")
     print("2) 1.1 Streak Failure Reversal - 连续 K 线后的失败反转")
-    choice = input("选择策略 [1/2, Enter=保持]: ").strip()
+    print("3) 1.2 AW Liquidity Reversal   - Sweep → Shift → FVG")
+    choice = input("选择策略 [1/2/3, Enter=保持]: ").strip()
     if not choice:
         return
-    target = {"1": "trend_rebalance", "2": "streak_failure"}.get(choice)
+    target = {"1": "trend_rebalance", "2": "streak_failure", "3": "aw_liquidity"}.get(choice)
     if not target:
-        raise ValueError("只能选择 1 或 2")
+        raise ValueError("只能选择 1、2 或 3")
     if target != strategy_name(cfg):
         set_env("STRATEGY", target)
         set_env("DRY_RUN", "true")
@@ -192,13 +204,14 @@ def configure_direction() -> None:
 
 def configure_strategy_params() -> None:
     cfg = read_env()
-    if strategy_name(cfg) == "trend_rebalance":
+    current_strategy = strategy_name(cfg)
+    if current_strategy == "trend_rebalance":
         sep = input(f"最小 SMA separation [{cfg.get('TREND_MIN_SEPARATION','30')}]: ").strip()
         if sep: set_env("TREND_MIN_SEPARATION", str(float(sep)))
         sl = input(f"固定 SL points [{cfg.get('TREND_SL_FIXED_POINTS','125')}]: ").strip()
         if sl: set_env("TREND_SL_FIXED_POINTS", str(float(sl)))
         print("Dynamic SMA200 TP 保持与 1.0 默认逻辑一致。")
-    else:
+    elif current_strategy == "streak_failure":
         length = input(f"连续 K 线数量 [{cfg.get('STREAK_LENGTH','5')}]: ").strip()
         if length: set_env("STREAK_LENGTH", str(int(length)))
         window = input(f"确认窗口 bars [{cfg.get('STREAK_WAIT_BARS','15')}]: ").strip()
@@ -210,6 +223,18 @@ def configure_strategy_params() -> None:
         r = input(f"TP R multiple [{cfg.get('STREAK_TP_R','1.0')}]: ").strip()
         if r: set_env("STREAK_TP_R", str(float(r)))
         print("默认 SL=terminal streak candle extreme，默认纽约时段=09:45–12:00。")
+    else:
+        swing = input(f"Swing Length [{cfg.get('AW_SWING_LENGTH','3')}]: ").strip()
+        if swing: set_env("AW_SWING_LENGTH", str(int(swing)))
+        disp = input(f"Displacement body >= ATR x [{cfg.get('AW_DISPLACEMENT_MULT','1.0')}]: ").strip()
+        if disp: set_env("AW_DISPLACEMENT_MULT", str(float(disp)))
+        mss = input(f"Sweep → Shift 最大 bars [{cfg.get('AW_MAX_BARS_TO_MSS','30')}]: ").strip()
+        if mss: set_env("AW_MAX_BARS_TO_MSS", str(int(mss)))
+        entry = input(f"Shift → Entry 最大 bars [{cfg.get('AW_MAX_BARS_TO_ENTRY','10')}]: ").strip()
+        if entry: set_env("AW_MAX_BARS_TO_ENTRY", str(int(entry)))
+        r = input(f"Fallback / Fixed R [{cfg.get('AW_TARGET_R','1.0')}]: ").strip()
+        if r: set_env("AW_TARGET_R", str(float(r)))
+        print("默认 TP=Opposite Liquidity，SL=被 sweep 的结构极值；HTF=15m，PDH/PDL 开启。")
 
 
 def start_bot() -> None:
