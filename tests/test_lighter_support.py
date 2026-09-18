@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from app.bot import build_market_data
 from app.config import Config
-from app.lighter_client import LighterPublicClient, price_to_int, size_to_int
+from app.lighter_client import LighterMarket, LighterPublicClient, price_to_int, size_to_int
 from app.market_data import LighterMarketData
+from app.executor import LighterExecutor
 
 
 def base_env(monkeypatch):
@@ -119,3 +124,50 @@ def test_lighter_public_market_candles_and_account():
     account = client.account(123)
     assert account["available_balance"] == "500"
     assert account["positions"][0]["avg_entry_price"] == "80000"
+
+
+def test_lighter_signer_client_is_constructed_inside_running_loop(monkeypatch):
+    base_env(monkeypatch)
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("LIGHTER_ACCOUNT_INDEX", "123")
+    monkeypatch.setenv("LIGHTER_API_KEY_INDEX", "3")
+    monkeypatch.setenv("LIGHTER_API_KEY_PRIVATE", "dedicated-lighter-api-key")
+    monkeypatch.setenv("LEVERAGE", "0")
+    cfg = Config.load()
+
+    class FakePublic:
+        def __init__(self, profile, symbol):
+            self.profile = profile
+            self.symbol = symbol
+
+        def resolve_market(self):
+            return LighterMarket(
+                symbol="BTC",
+                market_id=1,
+                size_decimals=5,
+                price_decimals=1,
+                min_base_amount=0,
+                min_quote_amount=0,
+            )
+
+    class FakeSignerClient:
+        CROSS_MARGIN_MODE = 0
+
+        def __init__(self, **kwargs):
+            # aiohttp requires this exact construction context in the real SDK.
+            assert asyncio.get_running_loop().is_running()
+            self.order_api = object()
+
+        def check_client(self):
+            return None
+
+    monkeypatch.setattr("app.executor.LighterPublicClient", FakePublic)
+    monkeypatch.setitem(sys.modules, "lighter", SimpleNamespace(SignerClient=FakeSignerClient))
+
+    executor = LighterExecutor(cfg)
+    try:
+        assert executor.market_id == 1
+        assert executor.account_index == 123
+        assert executor.api_key_index == 3
+    finally:
+        executor.loop.close()
