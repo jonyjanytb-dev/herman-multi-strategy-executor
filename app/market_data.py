@@ -139,7 +139,7 @@ class LighterMarketData:
     def fetch_recent(self, count: int = 500) -> list[Candle]:
         now = int(time.time() * 1000)
         bucket = now // MINUTE_MS
-        if self._cache and self._last_success_minute == bucket and len(self._cache) >= min(count, len(self._cache)):
+        if self._cache and self._last_success_minute == bucket and len(self._cache) >= count:
             return self._cache[-count:]
 
         # Strategy 1.2 may request ~3000 bars. Lighter's public API is paged
