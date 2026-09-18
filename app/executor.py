@@ -231,13 +231,7 @@ class LighterExecutor(BaseExecutor):
         # synchronous, so keep one dedicated event loop for all signed writes
         # and private order reads rather than creating a new loop per request.
         self.loop = asyncio.new_event_loop()
-        self.client = lighter.SignerClient(
-            url=profile_api_url(cfg.lighter_profile),
-            account_index=self.account_index,
-            api_private_keys={self.api_key_index: cfg.lighter_api_key_private},
-            chain_id=profile_chain_id(cfg.lighter_profile),
-        )
-        self.order_api = self.client.order_api
+        self.client, self.order_api = self._run(self._build_sdk_client())
         err = self.client.check_client()
         if err is not None:
             raise RuntimeError(f"Lighter API key validation failed: {err}")
@@ -254,6 +248,18 @@ class LighterExecutor(BaseExecutor):
             )
             if err is not None:
                 raise RuntimeError(f"Lighter leverage update failed: {err}")
+
+    async def _build_sdk_client(self):
+        # aiohttp.ClientSession is created inside lighter.SignerClient, and
+        # modern aiohttp requires construction while an event loop is running.
+        # Official Lighter examples also build the client from async code.
+        client = self.lighter.SignerClient(
+            url=profile_api_url(self.cfg.lighter_profile),
+            account_index=self.account_index,
+            api_private_keys={self.api_key_index: self.cfg.lighter_api_key_private},
+            chain_id=profile_chain_id(self.cfg.lighter_profile),
+        )
+        return client, client.order_api
 
     def _run(self, awaitable):
         return self.loop.run_until_complete(awaitable)
