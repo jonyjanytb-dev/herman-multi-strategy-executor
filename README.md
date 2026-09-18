@@ -2,7 +2,7 @@
 
 把 HermanTrading / @RHerman 公开的 TradingView 策略工程化落地为可本地运行的 Python 自动交易执行器。
 
-当前支持三套彼此独立的策略逻辑，并共用 Hyperliquid / OKX 执行层、同一套本地交互终端和统一凭证配置。
+当前支持三套彼此独立的策略逻辑，并共用 Hyperliquid / OKX / Lighter 执行层、同一套本地交互终端和统一凭证配置。
 
 > 策略思想与原始 Pine Script 来源于 HermanTrading。本项目负责交易所接入、自动执行、保护单、状态恢复与多策略工程化落地；与 HermanTrading 不存在官方隶属、代理或合作关系，除非双方另有明确公开说明。
 
@@ -75,7 +75,7 @@
 
 > 上游仓库目前未提供单独 LICENSE，源文件头部也未声明独立软件许可证。因此本仓库不重新发布其完整 Pine 源码，只提供来源链接，并发布独立的 Python 工程实现。
 
-> 执行器使用 1m 已收盘 K 线重建该状态机；AW 策略会请求更长历史用于 swing、15m 流动性与 Previous Day High/Low。Hyperliquid 首次启动会回看约 3000 根 1m K 线；OKX 的本地历史缓存会随着运行逐步补充。
+> 执行器使用 1m 已收盘 K 线重建该状态机；AW 策略会请求更长历史用于 swing、15m 流动性与 Previous Day High/Low。Hyperliquid 与 Lighter 首次启动会回看约 3000 根 1m K 线；OKX 的本地历史缓存会随着运行逐步补充。
 
 ## 交易所与执行
 
@@ -83,10 +83,12 @@
 
 - Hyperliquid HIP-3，默认 `xyz:XYZ100`
 - OKX linear perpetual swap
+- Lighter Core / Robinhood Chain Lighter perpetual，默认 `BTC`
 - DRY RUN
 - OKX DEMO
 - LIVE
-- 原生 TP / SL 保护单
+- 市价 / IOC 入场并设置最大允许滑点
+- 原生 reduce-only TP / SL 保护单
 - 每个策略独立 runtime state
 - closed bar 去重，避免同一根 K 重复提交入场
 
@@ -96,6 +98,7 @@
 runtime/state-hyperliquid-trend_rebalance.json
 runtime/state-hyperliquid-streak_failure.json
 runtime/state-hyperliquid-aw_liquidity.json
+runtime/state-lighter-aw_liquidity.json
 ```
 
 ## 快速开始
@@ -130,6 +133,32 @@ bash run_local.sh
 3) 1.2 AW Liquidity Reversal
 ```
 
+
+## Lighter
+
+Lighter 接口使用官方 `lighter-sdk` 进行签名交易，并用公开 REST API 获取市场数据和账户状态。
+
+支持实例：
+
+```text
+mainnet            = Lighter Core
+robinhood          = Robinhood Chain Lighter
+testnet            = Lighter Core Testnet
+robinhood_testnet  = Robinhood Chain Testnet
+```
+
+默认标的是 `BTC`。LIVE 模式需要：
+
+```text
+LIGHTER_ACCOUNT_INDEX
+LIGHTER_API_KEY_INDEX
+LIGHTER_API_KEY_PRIVATE
+```
+
+这里的 `LIGHTER_API_KEY_PRIVATE` 是 **Lighter API Key 私钥**，不是钱包 / ETH 主私钥。机器人运行交易时不需要把钱包主私钥放进项目。
+
+策略信号触发后，Lighter 执行层使用 Market + IOC 语义，并通过 `MAX_SLIPPAGE` 限制可接受成交滑点。SL / TP 使用交易所原生 reduce-only trigger orders；重启后会尝试从 Lighter 当前活动订单中恢复保护单。
+
 ## Hyperliquid
 
 如果你准备使用 Hyperliquid，可以通过下面的邀请链接注册：
@@ -142,6 +171,7 @@ bash run_local.sh
 
 - `.env` 已加入 `.gitignore`，不要提交真实密钥
 - Hyperliquid 使用单独授权的 API Wallet，不要使用主钱包私钥
+- Lighter 只保存专用 API Key 私钥，不要把钱包 / ETH 主私钥写入 `.env`
 - OKX API 建议仅开启 Read + Trade，不开启 Withdraw
 - 更新代码后先用 DRY RUN / DEMO 验证
 - LIVE 开仓后请人工确认交易所原生 SL / TP 已成功存在

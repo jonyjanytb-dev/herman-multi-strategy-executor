@@ -40,6 +40,15 @@ This Pine Script® code is subject to the terms of the Mozilla Public License 2.
 
 因此，本仓库不重新发布该上游文件的完整 Pine 源码。本项目仅依据公开可观察的策略规则，发布独立编写的 Python 工程实现，并保留上游来源链接与作者归属说明。
 
+
+## Lighter Python SDK
+
+- Project: `elliottech/lighter-python`
+- Upstream: <https://github.com/elliottech/lighter-python>
+- License: Apache License 2.0
+
+本项目通过官方 Lighter Python SDK 对 Lighter Core / Robinhood Chain Lighter 进行签名交易。Lighter 名称、协议与相关商标归其各自权利人所有。
+
 ## Hyperliquid referral disclosure
 
 README 中的 Hyperliquid 邀请链接包含推荐关系（referral）。是否使用该链接不影响本项目源码、功能或使用权限。

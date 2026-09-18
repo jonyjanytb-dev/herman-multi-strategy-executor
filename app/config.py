@@ -59,6 +59,12 @@ class Config:
     okx_margin_mode: str
     okx_base_url: str
 
+    lighter_profile: str
+    lighter_symbol: str
+    lighter_account_index: int
+    lighter_api_key_index: int
+    lighter_api_key_private: str
+
     trend_sma50_length: int
     trend_sma200_length: int
     trend_point_size: float
@@ -138,6 +144,11 @@ class Config:
             okx_demo=_bool("OKX_DEMO", True),
             okx_margin_mode=_text("OKX_MARGIN_MODE", "cross").lower(),
             okx_base_url=_text("OKX_BASE_URL", "https://www.okx.com"),
+            lighter_profile=_text("LIGHTER_PROFILE", "mainnet").lower(),
+            lighter_symbol=_text("LIGHTER_SYMBOL", "BTC").upper(),
+            lighter_account_index=_int("LIGHTER_ACCOUNT_INDEX", -1),
+            lighter_api_key_index=_int("LIGHTER_API_KEY_INDEX", -1),
+            lighter_api_key_private=_text("LIGHTER_API_KEY_PRIVATE", ""),
             trend_sma50_length=_int("TREND_SMA50_LENGTH", 50),
             trend_sma200_length=_int("TREND_SMA200_LENGTH", 200),
             trend_point_size=_float("TREND_POINT_SIZE", 1.0),
@@ -188,8 +199,8 @@ class Config:
     def validate(self) -> None:
         if self.strategy not in {"trend_rebalance", "streak_failure", "aw_liquidity"}:
             raise ValueError("STRATEGY must be trend_rebalance, streak_failure, or aw_liquidity")
-        if self.exchange not in {"hyperliquid", "okx"}:
-            raise ValueError("EXCHANGE must be hyperliquid or okx")
+        if self.exchange not in {"hyperliquid", "okx", "lighter"}:
+            raise ValueError("EXCHANGE must be hyperliquid, okx, or lighter")
         if self.interval != "1m":
             raise ValueError("INTERVAL must remain 1m")
         if self.order_notional_usdc <= 0:
@@ -252,7 +263,7 @@ class Config:
                     raise ValueError("ACCOUNT_ADDRESS 格式错误：必须是 0x 开头的 40 位十六进制地址")
                 if not valid_private_key(self.api_private_key):
                     raise ValueError("API_PRIVATE_KEY 格式错误：必须是 32-byte 十六进制私钥，可带 0x 前缀")
-        else:
+        elif self.exchange == "okx":
             if not self.okx_inst_id.endswith("-SWAP"):
                 raise ValueError("OKX_INST_ID must end in -SWAP")
             if self.okx_margin_mode not in {"cross", "isolated"}:
@@ -262,10 +273,26 @@ class Config:
                 raise ValueError("OKX_BASE_URL must be an official OKX HTTPS origin")
             if not self.dry_run and not all((self.okx_api_key, self.okx_secret_key, self.okx_passphrase)):
                 raise ValueError("OKX API credentials required when DRY_RUN=false")
+        else:
+            if self.lighter_profile not in {"mainnet", "robinhood", "testnet", "robinhood_testnet"}:
+                raise ValueError("LIGHTER_PROFILE must be mainnet, robinhood, testnet, or robinhood_testnet")
+            if not self.lighter_symbol or not self.lighter_symbol.replace("-", "").replace("_", "").isalnum():
+                raise ValueError("LIGHTER_SYMBOL invalid")
+            if not self.dry_run:
+                if self.lighter_account_index < 0:
+                    raise ValueError("LIGHTER_ACCOUNT_INDEX required when LIVE")
+                if not 0 <= self.lighter_api_key_index <= 254:
+                    raise ValueError("LIGHTER_API_KEY_INDEX must be between 0 and 254 when LIVE")
+                if not self.lighter_api_key_private:
+                    raise ValueError("LIGHTER_API_KEY_PRIVATE required when LIVE")
 
     @property
     def market_symbol(self) -> str:
-        return self.okx_inst_id if self.exchange == "okx" else self.coin
+        if self.exchange == "okx":
+            return self.okx_inst_id
+        if self.exchange == "lighter":
+            return f"{self.lighter_profile}:{self.lighter_symbol}"
+        return self.coin
 
     @property
     def execution_mode(self) -> str:
