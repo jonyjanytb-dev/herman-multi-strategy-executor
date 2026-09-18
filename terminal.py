@@ -10,6 +10,8 @@ from pathlib import Path
 import requests
 from dotenv import dotenv_values
 
+from app.lighter_client import LighterPublicClient
+
 ROOT = Path(__file__).resolve().parent
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE = ROOT / ".env.example"
@@ -70,7 +72,12 @@ def mode(cfg: dict[str, str]) -> str:
 
 
 def market(cfg: dict[str, str]) -> str:
-    return cfg.get("OKX_INST_ID", "US100-USDT-SWAP") if exchange_name(cfg) == "okx" else cfg.get("COIN", "xyz:XYZ100")
+    ex = exchange_name(cfg)
+    if ex == "okx":
+        return cfg.get("OKX_INST_ID", "US100-USDT-SWAP")
+    if ex == "lighter":
+        return f"{cfg.get('LIGHTER_PROFILE','mainnet')}:{cfg.get('LIGHTER_SYMBOL','BTC')}"
+    return cfg.get("COIN", "xyz:XYZ100")
 
 
 def mask(value: str) -> str:
@@ -87,7 +94,9 @@ def show_status() -> None:
     print(" Herman Multi-Strategy Executor · 本地交互终端")
     print("=" * 68)
     print(f" 策略        : {strategy_label(cfg)}")
-    print(f" 交易所      : {'OKX' if exchange_name(cfg) == 'okx' else 'Hyperliquid'}")
+    ex = exchange_name(cfg)
+    exchange_label = {"hyperliquid": "Hyperliquid", "okx": "OKX", "lighter": "Lighter"}.get(ex, ex)
+    print(f" 交易所      : {exchange_label}")
     print(f" 模式        : {mode(cfg)}")
     print(f" 市场        : {market(cfg)}")
     print(f" 周期        : 1m")
@@ -108,12 +117,17 @@ def show_status() -> None:
         print(f" Swing / HTF : {cfg.get('AW_SWING_LENGTH','3')} / {cfg.get('AW_HTF_MINUTES','15')}m")
         print(f" Session     : Asia+London+NY AM (NY PM={cfg.get('AW_USE_NYPM','false')})")
         print(f" TP / SL     : {cfg.get('AW_TARGET_MODE','opposite_liquidity')} / swept liquidity")
-    if exchange_name(cfg) == "hyperliquid":
+    if ex == "hyperliquid":
         print(f" 主账户      : {mask(cfg.get('ACCOUNT_ADDRESS',''))}")
         print(f" API Wallet  : {'已设置' if cfg.get('API_PRIVATE_KEY') else '未设置'}")
-    else:
+    elif ex == "okx":
         ready = all(cfg.get(k) for k in ("OKX_API_KEY", "OKX_SECRET_KEY", "OKX_PASSPHRASE"))
         print(f" OKX API     : {'已设置' if ready else '未设置'}")
+    else:
+        print(f" Lighter实例 : {cfg.get('LIGHTER_PROFILE','mainnet')}")
+        print(f" Account idx : {cfg.get('LIGHTER_ACCOUNT_INDEX','-1')}")
+        print(f" API Key idx : {cfg.get('LIGHTER_API_KEY_INDEX','-1')}")
+        print(f" Lighter API : {'已设置' if cfg.get('LIGHTER_API_KEY_PRIVATE') else '未设置'}")
     print("=" * 68)
 
 
@@ -154,27 +168,72 @@ def configure_exchange() -> None:
     cfg = read_env()
     print("\n1) Hyperliquid")
     print("2) OKX")
-    choice = input("选择交易所 [1/2, Enter=保持]: ").strip()
-    ex = {"1": "hyperliquid", "2": "okx"}.get(choice, exchange_name(cfg))
-    if choice not in {"", "1", "2"}: raise ValueError("只能选择 1 或 2")
+    print("3) Lighter")
+    choice = input("选择交易所 [1/2/3, Enter=保持]: ").strip()
+    ex = {"1": "hyperliquid", "2": "okx", "3": "lighter"}.get(choice, exchange_name(cfg))
+    if choice not in {"", "1", "2", "3"}:
+        raise ValueError("只能选择 1、2 或 3")
     if ex != exchange_name(cfg):
         set_env("EXCHANGE", ex)
         set_env("DRY_RUN", "true")
         set_env("STATE_PATH", "")
     cfg = read_env()
+
     if ex == "hyperliquid":
         addr = input(f"主账户地址 [{mask(cfg.get('ACCOUNT_ADDRESS',''))}]: ").strip()
-        if addr: set_env("ACCOUNT_ADDRESS", addr)
+        if addr:
+            set_env("ACCOUNT_ADDRESS", addr)
         print("API Wallet 私钥不会回显；留空保持原值。")
         secret = getpass.getpass("API Wallet Private Key: ").strip()
-        if secret: set_env("API_PRIVATE_KEY", secret)
-    else:
+        if secret:
+            set_env("API_PRIVATE_KEY", secret)
+        return
+
+    if ex == "okx":
         inst = input(f"OKX 永续合约 [{cfg.get('OKX_INST_ID','US100-USDT-SWAP')}]: ").strip().upper()
-        if inst: set_env("OKX_INST_ID", inst)
+        if inst:
+            set_env("OKX_INST_ID", inst)
         for key, label in (("OKX_API_KEY","API Key"),("OKX_SECRET_KEY","Secret Key"),("OKX_PASSPHRASE","Passphrase")):
             secret = getpass.getpass(f"OKX {label}（留空保持）: ").strip()
-            if secret: set_env(key, secret)
+            if secret:
+                set_env(key, secret)
+        return
 
+    print("\nLighter 实例:")
+    print("1) Core Mainnet")
+    print("2) Robinhood Chain")
+    print("3) Core Testnet")
+    print("4) Robinhood Testnet")
+    profiles = {"1": "mainnet", "2": "robinhood", "3": "testnet", "4": "robinhood_testnet"}
+    current_profile = cfg.get("LIGHTER_PROFILE", "mainnet")
+    profile_choice = input(f"选择实例 [1/2/3/4, Enter=保持 {current_profile}]: ").strip()
+    if profile_choice:
+        profile = profiles.get(profile_choice)
+        if not profile:
+            raise ValueError("Lighter 实例只能选择 1、2、3 或 4")
+        set_env("LIGHTER_PROFILE", profile)
+
+    symbol = input(f"Lighter 永续标的 [{cfg.get('LIGHTER_SYMBOL','BTC')}]: ").strip().upper()
+    if symbol:
+        set_env("LIGHTER_SYMBOL", symbol)
+
+    account_index = input(f"Account Index [{cfg.get('LIGHTER_ACCOUNT_INDEX','-1')}]: ").strip()
+    if account_index:
+        if int(account_index) < 0:
+            raise ValueError("Account Index 必须 >= 0")
+        set_env("LIGHTER_ACCOUNT_INDEX", str(int(account_index)))
+
+    api_key_index = input(f"API Key Index [{cfg.get('LIGHTER_API_KEY_INDEX','-1')}]: ").strip()
+    if api_key_index:
+        value = int(api_key_index)
+        if not 0 <= value <= 254:
+            raise ValueError("API Key Index 必须在 0–254")
+        set_env("LIGHTER_API_KEY_INDEX", str(value))
+
+    print("只填写 Lighter API Key 私钥；不要填写钱包/ETH 主私钥。留空保持原值。")
+    secret = getpass.getpass("Lighter API Key Private: ").strip()
+    if secret:
+        set_env("LIGHTER_API_KEY_PRIVATE", secret)
 
 def switch_mode() -> None:
     cfg = read_env()
@@ -249,7 +308,8 @@ def start_bot() -> None:
 
 def query_funds() -> None:
     cfg = read_env()
-    if exchange_name(cfg) == "hyperliquid":
+    ex = exchange_name(cfg)
+    if ex == "hyperliquid":
         address = cfg.get("ACCOUNT_ADDRESS", "").strip()
         if not address:
             print("主账户地址未设置。")
@@ -266,10 +326,31 @@ def query_funds() -> None:
         print("Spot:")
         for b in spot.get("balances", []):
             total = float(b.get("total") or 0)
-            if total: print(f"  {b.get('coin')}: {total}")
-    else:
-        print("OKX 资金查询请使用交易所账户页面；交易执行器会在启动时验证账户/API。")
+            if total:
+                print(f"  {b.get('coin')}: {total}")
+        return
 
+    if ex == "okx":
+        print("OKX 资金查询请使用交易所账户页面；交易执行器会在启动时验证账户/API。")
+        return
+
+    account_index = int(cfg.get("LIGHTER_ACCOUNT_INDEX", "-1") or -1)
+    if account_index < 0:
+        print("Lighter Account Index 未设置。")
+        return
+    client = LighterPublicClient(
+        profile=cfg.get("LIGHTER_PROFILE", "mainnet"),
+        symbol=cfg.get("LIGHTER_SYMBOL", "BTC"),
+    )
+    account = client.account(account_index, active_only=False)
+    market_info = client.resolve_market()
+    print("\nLighter available balance:", account.get("available_balance", "0"))
+    print("Lighter collateral:", account.get("collateral", "0"))
+    print("Lighter total asset value:", account.get("total_asset_value", "0"))
+    for pos in account.get("positions") or []:
+        if int(pos.get("market_id", -1)) == market_info.market_id and float(pos.get("position") or 0) != 0:
+            side = "LONG" if int(pos.get("sign") or 0) > 0 else "SHORT"
+            print(f"{market_info.symbol} position: {side} {pos.get('position')} @ {pos.get('avg_entry_price')}")
 
 def main() -> None:
     ensure_env()
