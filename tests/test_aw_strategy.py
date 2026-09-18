@@ -73,3 +73,29 @@ def test_aw_does_not_open_when_executor_is_not_flat(monkeypatch):
     strategy = AWLiquidityReversalStrategy(cfg(monkeypatch))
     state = RuntimeState(strategy="aw_liquidity")
     assert strategy.evaluate(bullish_fixture(), state, False) is None
+
+
+def test_aw_aggregates_five_minute_bars_into_complete_hour(monkeypatch):
+    monkeypatch.setenv("STRATEGY", "aw_liquidity")
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("EXCHANGE", "lighter")
+    monkeypatch.setenv("INTERVAL", "5m")
+    monkeypatch.setenv("LIGHTER_PROFILE", "mainnet")
+    monkeypatch.setenv("LIGHTER_SYMBOL", "BTC")
+    monkeypatch.setenv("AW_SWING_LENGTH", "100")
+    monkeypatch.setenv("AW_USE_HTF_LIQUIDITY", "true")
+    monkeypatch.setenv("AW_HTF_MINUTES", "60")
+    monkeypatch.setenv("AW_HTF_PIVOT_STRENGTH", "1")
+    monkeypatch.setenv("AW_USE_PDHL", "false")
+    strategy = AWLiquidityReversalStrategy(Config.load())
+
+    hourly_highs = [100, 110, 120, 110, 100]
+    candles = []
+    for hour, high in enumerate(hourly_highs):
+        for bar in range(12):
+            timestamp = BASE + (hour * 12 + bar) * 5 * 60_000
+            candles.append(Candle(timestamp, 95, high, 80 + hour, 95, 1.0))
+
+    _, status = strategy._replay(candles)
+
+    assert "untaken H=1" in status

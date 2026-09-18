@@ -11,6 +11,7 @@ import requests
 from dotenv import dotenv_values
 
 from app.lighter_client import LighterPublicClient
+from app.timeframes import AW_AUTO_HTF_MINUTES, LIGHTER_INTERVAL_SECONDS
 
 ROOT = Path(__file__).resolve().parent
 ENV_PATH = ROOT / ".env"
@@ -99,7 +100,7 @@ def show_status() -> None:
     print(f" 交易所      : {exchange_label}")
     print(f" 模式        : {mode(cfg)}")
     print(f" 市场        : {market(cfg)}")
-    print(f" 周期        : 1m")
+    print(f" 周期        : {cfg.get('INTERVAL','1m')}")
     print(f" 每笔名义仓位: {notional:.2f}")
     print(f" 杠杆        : {lev}x" if lev > 0 else " 杠杆        : 不自动修改")
     print(f" 做多 / 做空 : {cfg.get('ENABLE_LONGS','true')} / {cfg.get('ENABLE_SHORTS','true')}")
@@ -144,6 +145,9 @@ def configure_strategy() -> None:
         raise ValueError("只能选择 1、2 或 3")
     if target != strategy_name(cfg):
         set_env("STRATEGY", target)
+        if exchange_name(cfg) == "lighter" and target == "streak_failure":
+            set_env("INTERVAL", "1m")
+            set_env("AW_HTF_MINUTES", "15")
         set_env("DRY_RUN", "true")
         set_env("STATE_PATH", "")
         print("策略已切换。为安全起见已自动切回 DRY RUN，并使用独立策略状态文件。")
@@ -164,6 +168,43 @@ def configure_position() -> None:
         set_env("LEVERAGE", str(value))
 
 
+def configure_timeframe() -> None:
+    cfg = read_env()
+    if exchange_name(cfg) != "lighter":
+        raise ValueError("周期选择目前只对 Lighter Bot 开放")
+    if strategy_name(cfg) == "streak_failure":
+        raise ValueError("1.1 Streak Failure 当前必须使用 1m；请先切换到策略 1.0 或 1.2")
+
+    intervals = list(LIGHTER_INTERVAL_SECONDS)
+    print("\nLighter K 线周期:")
+    for index, interval in enumerate(intervals, start=1):
+        print(f"{index}) {interval}")
+    print("0) 返回")
+    current = cfg.get("INTERVAL", "1m")
+    choice = input(f"选择周期 [1-{len(intervals)}, 0/Enter=保持 {current}]: ").strip()
+    if choice in {"", "0"}:
+        return
+    try:
+        selected = int(choice)
+        if not 1 <= selected <= len(intervals):
+            raise ValueError
+        target = intervals[selected - 1]
+    except (ValueError, IndexError):
+        raise ValueError(f"周期只能选择 1–{len(intervals)}") from None
+    if target == current:
+        return
+
+    set_env("INTERVAL", target)
+    if strategy_name(cfg) == "aw_liquidity":
+        set_env("AW_HTF_MINUTES", str(AW_AUTO_HTF_MINUTES[target]))
+    set_env("DRY_RUN", "true")
+    set_env("STATE_PATH", "")
+    print(
+        f"周期已切换为 {target}。为安全起见已切回 DRY RUN，"
+        "并启用该周期的独立状态文件。"
+    )
+
+
 def configure_exchange() -> None:
     cfg = read_env()
     print("\n1) Hyperliquid")
@@ -175,6 +216,10 @@ def configure_exchange() -> None:
         raise ValueError("只能选择 1、2 或 3")
     if ex != exchange_name(cfg):
         set_env("EXCHANGE", ex)
+        if ex != "lighter":
+            set_env("INTERVAL", "1m")
+            if strategy_name(cfg) == "aw_liquidity":
+                set_env("AW_HTF_MINUTES", "15")
         set_env("DRY_RUN", "true")
         set_env("STATE_PATH", "")
     cfg = read_env()
@@ -293,7 +338,7 @@ def configure_strategy_params() -> None:
         if entry: set_env("AW_MAX_BARS_TO_ENTRY", str(int(entry)))
         r = input(f"Fallback / Fixed R [{cfg.get('AW_TARGET_R','1.0')}]: ").strip()
         if r: set_env("AW_TARGET_R", str(float(r)))
-        print("默认 TP=Opposite Liquidity，SL=被 sweep 的结构极值；HTF=15m，PDH/PDL 开启。")
+        print(f"默认 TP=Opposite Liquidity，SL=被 sweep 的结构极值；HTF={cfg.get('AW_HTF_MINUTES','15')}m，PDH/PDL 开启。")
 
 
 def start_bot() -> None:
@@ -363,7 +408,8 @@ def main() -> None:
         print(" 5) 切换 DRY RUN / DEMO / LIVE")
         print(" 6) 设置做多 / 做空方向")
         print(" 7) 设置当前策略参数")
-        print(" 8) 查询资金 / 当前账户")
+        print(" 8) 设置 Lighter K 线周期")
+        print(" 9) 查询资金 / 当前账户")
         print(" 0) 退出")
         choice = input("\n请选择: ").strip()
         try:
@@ -374,7 +420,8 @@ def main() -> None:
             elif choice == "5": switch_mode()
             elif choice == "6": configure_direction()
             elif choice == "7": configure_strategy_params()
-            elif choice == "8": query_funds()
+            elif choice == "8": configure_timeframe()
+            elif choice == "9": query_funds()
             elif choice == "0": return
             else: print("无效选项。")
         except (ValueError, RuntimeError, OSError, requests.RequestException) as exc:

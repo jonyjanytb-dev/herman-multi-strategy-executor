@@ -28,8 +28,28 @@ def test_lighter_dry_run_config_does_not_require_secret(monkeypatch):
     cfg = Config.load()
     assert cfg.exchange == "lighter"
     assert cfg.market_symbol == "mainnet:BTC"
-    assert cfg.state_path.endswith("state-lighter-aw_liquidity.json")
+    assert cfg.state_path.endswith("state-lighter-aw_liquidity-1m.json")
     assert isinstance(build_market_data(cfg), LighterMarketData)
+
+
+@pytest.mark.parametrize("interval", ["1m", "5m", "15m", "30m", "1h"])
+def test_lighter_accepts_supported_candle_intervals(monkeypatch, interval):
+    base_env(monkeypatch)
+    monkeypatch.setenv("INTERVAL", interval)
+
+    cfg = Config.load()
+
+    assert cfg.interval == interval
+    assert cfg.state_path.endswith(f"state-lighter-aw_liquidity-{interval}.json")
+
+
+def test_non_lighter_exchange_stays_on_one_minute(monkeypatch):
+    base_env(monkeypatch)
+    monkeypatch.setenv("EXCHANGE", "hyperliquid")
+    monkeypatch.setenv("INTERVAL", "5m")
+
+    with pytest.raises(ValueError, match="Lighter"):
+        Config.load()
 
 
 def test_lighter_live_requires_dedicated_api_credentials(monkeypatch):
@@ -124,6 +144,35 @@ def test_lighter_public_market_candles_and_account():
     account = client.account(123)
     assert account["available_balance"] == "500"
     assert account["positions"][0]["avg_entry_price"] == "80000"
+
+
+def test_lighter_public_candles_use_selected_resolution_and_duration():
+    session = FakeSession()
+    client = LighterPublicClient(profile="mainnet", symbol="BTC", session=session)
+
+    client.candles(count=2, resolution="5m", now_ms=1_700_000_180_000)
+
+    candle_calls = [call for call in session.calls if call[0].endswith("/api/v1/candles")]
+    assert candle_calls
+    params = candle_calls[0][1]
+    assert params["resolution"] == "5m"
+    assert params["start_timestamp"] == 1_700_000_180 - (2 + 10) * 5 * 60
+
+
+def test_lighter_market_data_accepts_selected_interval(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def candles(self, count, resolution, now_ms):
+            self.calls.append((count, resolution, now_ms))
+            return []
+
+    fake = FakeClient()
+    market = LighterMarketData("mainnet", "BTC", interval="15m", client=fake)
+    market.fetch_recent(20)
+
+    assert fake.calls[0][0:2] == (20, "15m")
 
 
 def test_lighter_signer_client_is_constructed_inside_running_loop(monkeypatch):

@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from .config import Config
 from .models import Candle, RuntimeState, Signal
+from .timeframes import interval_minutes
 
 NY = ZoneInfo("America/New_York")
 MINUTE_MS = 60_000
@@ -123,6 +124,9 @@ class AWLiquidityReversalStrategy:
 
         htf_minutes = self.cfg.aw_htf_minutes
         htf_ms = htf_minutes * MINUTE_MS
+        base_minutes = interval_minutes(self.cfg.interval) if self.cfg.exchange == "lighter" else 1
+        base_ms = base_minutes * MINUTE_MS
+        htf_bar_count = htf_minutes // base_minutes
         htf_buf: list[Candle] = []
         htf_candles: list[Candle] = []
 
@@ -174,12 +178,21 @@ class AWLiquidityReversalStrategy:
                 if not level["taken"] and c.l < float(level["price"]):
                     level["taken"] = True
 
-            # 1m engine -> default upstream auto pairing is 15m. Aggregate only
-            # fully closed higher-timeframe bars.
+            # Aggregate only complete, aligned higher-timeframe bars. The base
+            # feed may be 1m, 5m, 15m, 30m, or 1h on Lighter.
             if self.cfg.aw_use_htf_liquidity:
                 htf_buf.append(c)
-                if (c.t + MINUTE_MS) % htf_ms == 0:
-                    if htf_buf:
+                if (c.t + base_ms) % htf_ms == 0:
+                    bucket_start = (c.t // htf_ms) * htf_ms
+                    complete = (
+                        len(htf_buf) == htf_bar_count
+                        and htf_buf[0].t == bucket_start
+                        and all(
+                            htf_buf[j].t == bucket_start + j * base_ms
+                            for j in range(len(htf_buf))
+                        )
+                    )
+                    if complete:
                         htf = Candle(
                             htf_buf[0].t,
                             htf_buf[0].o,
@@ -197,6 +210,7 @@ class AWLiquidityReversalStrategy:
                                 self._push_liquidity(liq_high, htf_candles[hcenter].h, "htf", max_liq)
                             if self._pivot_low(htf_candles, hcenter, hs):
                                 self._push_liquidity(liq_low, htf_candles[hcenter].l, "htf", max_liq)
+                    htf_buf = []
 
             # Previous completed UTC day high/low. The first partial day in a
             # finite replay window is ignored unless it contains a full 24h.
@@ -210,7 +224,12 @@ class AWLiquidityReversalStrategy:
                 day_last_minute = minute_utc
                 day_count = 1
             elif current_day != day_key:
-                full_day = day_first_minute == 0 and day_last_minute == 1439 and day_count >= 1400
+                expected_daily_bars = 1440 // base_minutes
+                full_day = (
+                    day_first_minute == 0
+                    and day_last_minute == 1440 - base_minutes
+                    and day_count >= expected_daily_bars
+                )
                 if self.cfg.aw_use_pdhl and full_day and day_high is not None and day_low is not None:
                     self._push_liquidity(liq_high, day_high, "pdh", max_liq)
                     self._push_liquidity(liq_low, day_low, "pdl", max_liq)

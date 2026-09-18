@@ -8,9 +8,7 @@ from typing import Any, Optional
 import requests
 
 from .models import Candle
-
-MINUTE_SECONDS = 60
-MINUTE_MS = 60_000
+from .timeframes import lighter_interval_seconds
 
 LIGHTER_PROFILES: dict[str, tuple[str, int]] = {
     "mainnet": ("https://mainnet.zklighter.elliot.ai", 304),
@@ -137,8 +135,8 @@ class LighterPublicClient:
     def candles(self, count: int, resolution: str = "1m", now_ms: Optional[int] = None) -> list[Candle]:
         if count <= 0:
             return []
-        if resolution != "1m":
-            raise ValueError("Herman Lighter market data currently requires 1m candles")
+        interval_seconds = lighter_interval_seconds(resolution)
+        interval_ms = interval_seconds * 1000
 
         market = self.resolve_market()
         now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
@@ -147,11 +145,11 @@ class LighterPublicClient:
         # Lighter returns at most 500 candles per request. Walk fixed time
         # windows forward and de-duplicate timestamps so Strategy 1.2 can
         # reliably obtain its ~3000-bar replay window.
-        start_sec = now_sec - (count + 10) * MINUTE_SECONDS
+        start_sec = now_sec - (count + 10) * interval_seconds
         cursor = start_sec
         merged: dict[int, Candle] = {}
         while cursor < now_sec and len(merged) < count + 5:
-            end_sec = min(now_sec, cursor + 500 * MINUTE_SECONDS)
+            end_sec = min(now_sec, cursor + 500 * interval_seconds)
             payload = self._get(
                 "/api/v1/candles",
                 {
@@ -164,7 +162,7 @@ class LighterPublicClient:
             )
             rows = payload.get("c") or []
             for candle in self._parse_candles(rows):
-                if candle.t + MINUTE_MS <= now_ms:
+                if candle.t + interval_ms <= now_ms:
                     merged[candle.t] = candle
             cursor = end_sec + 1
 

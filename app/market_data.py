@@ -9,6 +9,7 @@ import requests
 from .lighter_client import LighterPublicClient
 from .models import Candle
 from .okx_client import OKXClient
+from .timeframes import lighter_interval_seconds
 
 log = logging.getLogger(__name__)
 
@@ -127,8 +128,7 @@ class OKXMarketData:
 
 class LighterMarketData:
     def __init__(self, profile: str, symbol: str, interval: str = "1m", client: Optional[LighterPublicClient] = None):
-        if interval != "1m":
-            raise ValueError("LighterMarketData currently supports 1m only")
+        self._interval_ms = lighter_interval_seconds(interval) * 1000
         self.profile = profile
         self.symbol = symbol.upper()
         self.interval = interval
@@ -138,7 +138,7 @@ class LighterMarketData:
 
     def fetch_recent(self, count: int = 500) -> list[Candle]:
         now = int(time.time() * 1000)
-        bucket = now // MINUTE_MS
+        bucket = now // self._interval_ms
         if self._cache and self._last_success_minute == bucket and len(self._cache) >= count:
             return self._cache[-count:]
 

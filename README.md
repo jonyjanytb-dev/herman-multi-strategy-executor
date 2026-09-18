@@ -57,7 +57,7 @@
 核心逻辑：**流动性扫单后的结构反转 / Liquidity Reversal**。
 
 - 通过已确认 swing high / swing low 建立未触及流动性池
-- 默认额外纳入 15m 高周期 swing 流动性
+- 默认额外纳入自动匹配的高周期 swing 流动性（1m→15m、5m→1h、15m→4h、30m→6h、1h→1d）
 - 默认纳入 Previous Day High / Low
 - LONG：扫前低并收回 → bullish displacement 收盘突破 neckline → 形成 bullish FVG → FVG 触发入场
 - SHORT：完全镜像
@@ -75,7 +75,7 @@
 
 > 上游仓库目前未提供单独 LICENSE，源文件头部也未声明独立软件许可证。因此本仓库不重新发布其完整 Pine 源码，只提供来源链接，并发布独立的 Python 工程实现。
 
-> 执行器使用 1m 已收盘 K 线重建该状态机；AW 策略会请求更长历史用于 swing、15m 流动性与 Previous Day High/Low。Hyperliquid 与 Lighter 首次启动会回看约 3000 根 1m K 线；OKX 的本地历史缓存会随着运行逐步补充。
+> Hyperliquid / OKX 使用 1m 已收盘 K 线。Lighter 可选择 1m、5m、15m、30m 或 1h；AW 策略会按所选周期请求已收盘 K 线，并自动匹配更高周期流动性。首次启动会回看约 3000 根所选周期 K 线。
 
 ## 交易所与执行
 
@@ -98,7 +98,8 @@
 runtime/state-hyperliquid-trend_rebalance.json
 runtime/state-hyperliquid-streak_failure.json
 runtime/state-hyperliquid-aw_liquidity.json
-runtime/state-lighter-aw_liquidity.json
+runtime/state-lighter-aw_liquidity-1m.json
+runtime/state-lighter-aw_liquidity-5m.json
 ```
 
 ## 快速开始
@@ -121,7 +122,8 @@ bash run_local.sh
 5) 切换 DRY RUN / DEMO / LIVE
 6) 设置做多 / 做空方向
 7) 设置当前策略参数
-8) 查询资金 / 当前账户
+8) 设置 Lighter K 线周期
+9) 查询资金 / 当前账户
 0) 退出
 ```
 
@@ -154,6 +156,19 @@ LIGHTER_ACCOUNT_INDEX
 LIGHTER_API_KEY_INDEX
 LIGHTER_API_KEY_PRIVATE
 ```
+
+Lighter K 线周期可在终端菜单 `8` 中选择：
+
+```text
+1) 1m
+2) 5m
+3) 15m
+4) 30m
+5) 1h
+0) 返回
+```
+
+切换周期会自动切回 `DRY RUN`、为 AW 策略匹配更高分析周期，并使用独立状态文件。确认模拟运行正常后，再手动切回 LIVE。策略 1.1 暂时固定使用 1m。
 
 这里的 `LIGHTER_API_KEY_PRIVATE` 是 **Lighter API Key 私钥**，不是钱包 / ETH 主私钥。机器人运行交易时不需要把钱包主私钥放进项目。
 

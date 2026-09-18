@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from .credentials import valid_eth_address, valid_private_key
+from .timeframes import AW_AUTO_HTF_MINUTES, LIGHTER_INTERVAL_SECONDS, interval_minutes
 
 DEFAULT_OKX_INST_ID = "US100-USDT-SWAP"
 
@@ -116,8 +117,10 @@ class Config:
         load_dotenv()
         strategy = _text("STRATEGY", "trend_rebalance").lower()
         exchange = _text("EXCHANGE", "hyperliquid").lower()
+        interval = _text("INTERVAL", "1m")
         explicit_state = _text("STATE_PATH", "")
-        state_path = explicit_state or f"runtime/state-{exchange}-{strategy}.json"
+        state_suffix = f"-{interval}" if exchange == "lighter" else ""
+        state_path = explicit_state or f"runtime/state-{exchange}-{strategy}{state_suffix}.json"
         cfg = cls(
             strategy=strategy,
             dry_run=_bool("DRY_RUN", True),
@@ -125,7 +128,7 @@ class Config:
             network=_text("NETWORK", "mainnet").lower(),
             dex=_text("DEX", "xyz"),
             coin=_text("COIN", "xyz:XYZ100"),
-            interval=_text("INTERVAL", "1m"),
+            interval=interval,
             account_address=_text("ACCOUNT_ADDRESS", ""),
             api_private_key=_text("API_PRIVATE_KEY", ""),
             order_notional_usdc=_float("ORDER_NOTIONAL_USDC", 100.0),
@@ -178,7 +181,7 @@ class Config:
             aw_swing_length=_int("AW_SWING_LENGTH", 3),
             aw_max_liquidity=_int("AW_MAX_LIQUIDITY", 15),
             aw_use_htf_liquidity=_bool("AW_USE_HTF_LIQUIDITY", True),
-            aw_htf_minutes=_int("AW_HTF_MINUTES", 15),
+            aw_htf_minutes=_int("AW_HTF_MINUTES", AW_AUTO_HTF_MINUTES.get(interval, 15)),
             aw_htf_pivot_strength=_int("AW_HTF_PIVOT_STRENGTH", 2),
             aw_use_pdhl=_bool("AW_USE_PDHL", True),
             aw_atr_length=_int("AW_ATR_LENGTH", 2),
@@ -201,8 +204,14 @@ class Config:
             raise ValueError("STRATEGY must be trend_rebalance, streak_failure, or aw_liquidity")
         if self.exchange not in {"hyperliquid", "okx", "lighter"}:
             raise ValueError("EXCHANGE must be hyperliquid, okx, or lighter")
-        if self.interval != "1m":
-            raise ValueError("INTERVAL must remain 1m")
+        if self.exchange == "lighter":
+            if self.interval not in LIGHTER_INTERVAL_SECONDS:
+                choices = ", ".join(LIGHTER_INTERVAL_SECONDS)
+                raise ValueError(f"Lighter INTERVAL must be one of: {choices}")
+            if self.strategy == "streak_failure" and self.interval != "1m":
+                raise ValueError("Streak Failure on Lighter currently requires INTERVAL=1m")
+        elif self.interval != "1m":
+            raise ValueError("Only Lighter supports selectable INTERVAL; other exchanges must remain 1m")
         if self.order_notional_usdc <= 0:
             raise ValueError("ORDER_NOTIONAL_USDC must be > 0")
         if self.max_slippage <= 0 or self.max_slippage > 0.05:
@@ -235,6 +244,10 @@ class Config:
             raise ValueError("AW_MAX_LIQUIDITY must be between 5 and 40")
         if self.aw_htf_minutes <= 1:
             raise ValueError("AW_HTF_MINUTES must be > 1")
+        if self.exchange == "lighter" and self.strategy == "aw_liquidity" and self.aw_use_htf_liquidity:
+            base_minutes = interval_minutes(self.interval)
+            if self.aw_htf_minutes <= base_minutes or self.aw_htf_minutes % base_minutes:
+                raise ValueError("AW_HTF_MINUTES must be a larger whole multiple of the Lighter INTERVAL")
         if self.aw_htf_pivot_strength < 1:
             raise ValueError("AW_HTF_PIVOT_STRENGTH must be >= 1")
         if self.aw_atr_length < 1:
