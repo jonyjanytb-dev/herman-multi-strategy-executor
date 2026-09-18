@@ -5,6 +5,7 @@ from statistics import fmean
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from .aw_strategy import AWLiquidityReversalStrategy
 from .config import Config
 from .models import Candle, RuntimeState, Signal
 
@@ -340,4 +341,6 @@ class StreakFailureReversalStrategy:
 def build_strategy(cfg: Config):
     if cfg.strategy == "streak_failure":
         return StreakFailureReversalStrategy(cfg)
+    if cfg.strategy == "aw_liquidity":
+        return AWLiquidityReversalStrategy(cfg)
     return TrendRebalanceStrategy(cfg)

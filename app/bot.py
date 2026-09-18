@@ -79,7 +79,7 @@ class TradingBot:
                     tp_oid = self.executor.update_tp(pos.size, None, dynamic)
                     tp_px = dynamic
                 else:
-                    raise RuntimeError("Existing Streak position has no recoverable frozen TP; refusing reconstruction")
+                    raise RuntimeError(f"Existing {self.cfg.strategy_label} position has no recoverable frozen TP; refusing reconstruction")
             self.state.active_side = 1 if pos.size > 0 else -1
             self.state.active_entry = pos.entry_px
             self.state.active_sl = sl_px
@@ -137,7 +137,8 @@ class TradingBot:
         log.info("[%s] %s=%.2f | %s | %s", stamp, self.cfg.market_symbol, bar.c, self.strategy.status_text(candles, self.state), state)
 
     def process_once(self) -> bool:
-        candles = self.market.fetch_recent(self.cfg.lookback_candles)
+        required = int(getattr(self.strategy, "required_lookback", 0) or 0)
+        candles = self.market.fetch_recent(max(self.cfg.lookback_candles, required))
         if not candles:
             return False
         bar = candles[-1]

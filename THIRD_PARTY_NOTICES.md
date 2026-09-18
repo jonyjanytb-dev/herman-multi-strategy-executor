@@ -31,6 +31,15 @@ This Pine Script® code is subject to the terms of the Mozilla Public License 2.
 
 因此，本仓库不重新发布其完整 Pine 源码，只提供来源链接，并发布独立的 Python 工程实现。
 
+### AW Model / Liquidity Reversal
+
+- 原作者：HermanTrading / @aw_trades_ model source attribution
+- 上游仓库：<https://github.com/HermanTrading/aw_trades_-model>
+
+截至本项目加入 Strategy 1.2 时，上游仓库仅包含公开策略文本文件，仓库根目录未提供单独 LICENSE，源文件头部也未声明独立软件许可证。
+
+因此，本仓库不重新发布该上游文件的完整 Pine 源码。本项目仅依据公开可观察的策略规则，发布独立编写的 Python 工程实现，并保留上游来源链接与作者归属说明。
+
 ## Hyperliquid referral disclosure
 
 README 中的 Hyperliquid 邀请链接包含推荐关系（referral）。是否使用该链接不影响本项目源码、功能或使用权限。
