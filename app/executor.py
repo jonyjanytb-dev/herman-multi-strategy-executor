@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -8,6 +9,7 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP, ROUND_UP
 from typing import Optional
 
 from .config import Config
+from .lighter_client import LighterPublicClient, price_to_int, profile_api_url, profile_chain_id, size_to_int
 from .okx_client import OKXAPIError, OKXClient
 
 log = logging.getLogger(__name__)
@@ -209,6 +211,240 @@ class HyperliquidExecutor(BaseExecutor):
         return tp_oid, tp_px, sl_oid, sl_px
 
 
+
+
+class LighterExecutor(BaseExecutor):
+    """Lighter Core / Robinhood Chain execution through the official SDK."""
+
+    def __init__(self, cfg: Config):
+        import lighter
+
+        self.cfg = cfg
+        self.lighter = lighter
+        self.public = LighterPublicClient(profile=cfg.lighter_profile, symbol=cfg.lighter_symbol)
+        self.market = self.public.resolve_market()
+        self.market_id = self.market.market_id
+        self.account_index = int(cfg.lighter_account_index)
+        self.api_key_index = int(cfg.lighter_api_key_index)
+
+        # The official SDK is asyncio-based. The Herman bot is deliberately
+        # synchronous, so keep one dedicated event loop for all signed writes
+        # and private order reads rather than creating a new loop per request.
+        self.loop = asyncio.new_event_loop()
+        self.client = lighter.SignerClient(
+            url=profile_api_url(cfg.lighter_profile),
+            account_index=self.account_index,
+            api_private_keys={self.api_key_index: cfg.lighter_api_key_private},
+            chain_id=profile_chain_id(cfg.lighter_profile),
+        )
+        self.order_api = self.client.order_api
+        err = self.client.check_client()
+        if err is not None:
+            raise RuntimeError(f"Lighter API key validation failed: {err}")
+
+        self._client_order_index = int(time.time() * 1_000_000)
+        if cfg.leverage > 0:
+            _, _, err = self._run(
+                self.client.update_leverage(
+                    market_index=self.market_id,
+                    leverage=cfg.leverage,
+                    margin_mode=self.client.CROSS_MARGIN_MODE,
+                    api_key_index=self.api_key_index,
+                )
+            )
+            if err is not None:
+                raise RuntimeError(f"Lighter leverage update failed: {err}")
+
+    def _run(self, awaitable):
+        return self.loop.run_until_complete(awaitable)
+
+    def _next_client_order_index(self) -> int:
+        self._client_order_index += 1
+        return self._client_order_index
+
+    def _auth(self) -> str:
+        token, err = self.client.create_auth_token_with_expiry(api_key_index=self.api_key_index)
+        if err is not None or not token:
+            raise RuntimeError(f"Lighter auth token failed: {err or 'empty token'}")
+        return token
+
+    def _active_orders(self):
+        auth = self._auth()
+        response = self._run(
+            self.order_api.account_active_orders(
+                authorization=auth,
+                account_index=self.account_index,
+                market_id=self.market_id,
+                market_type="perp",
+            )
+        )
+        return list(getattr(response, "orders", None) or [])
+
+    def _find_order_index(self, client_order_index: int, timeout: float = 3.0) -> int:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            auth = self._auth()
+            response = self._run(
+                self.order_api.account_orders(
+                    authorization=auth,
+                    client_order_indexes=str(client_order_index),
+                    account_index=self.account_index,
+                )
+            )
+            for order in list(getattr(response, "orders", None) or []):
+                if int(getattr(order, "client_order_index", -1)) == int(client_order_index):
+                    return int(order.order_index)
+            time.sleep(0.15)
+        raise RuntimeError(f"Lighter order index not visible for client_order_index={client_order_index}")
+
+    @staticmethod
+    def _write_result(tx, response, err, action: str) -> dict:
+        if err is not None:
+            raise RuntimeError(f"Lighter {action} failed: {err}")
+        return {
+            "status": "ok",
+            "exchange": "lighter",
+            "action": action,
+            "tx": str(tx),
+            "response": str(response),
+        }
+
+    def position(self) -> Position:
+        account = self.public.account(self.account_index, active_only=True)
+        for row in account.get("positions") or []:
+            if int(row.get("market_id", -1)) != self.market_id:
+                continue
+            quantity = abs(float(row.get("position") or 0.0))
+            sign = int(row.get("sign") or 0)
+            if quantity <= 0 or sign == 0:
+                return Position(0.0, None)
+            entry = row.get("avg_entry_price")
+            return Position(quantity if sign > 0 else -quantity, float(entry) if entry not in (None, "") else None)
+        return Position(0.0, None)
+
+    def open_market(self, is_buy: bool, notional_usdc: float) -> dict:
+        client_index = self._next_client_order_index()
+        tx, response, err = self._run(
+            self.client.create_market_order_quote_amount(
+                market_index=self.market_id,
+                client_order_index=client_index,
+                quote_amount=float(notional_usdc),
+                max_slippage=self.cfg.max_slippage,
+                is_ask=not is_buy,
+                reduce_only=False,
+                api_key_index=self.api_key_index,
+            )
+        )
+        return self._write_result(tx, response, err, "open_market")
+
+    def close_market(self) -> dict:
+        pos = self.position()
+        if pos.flat:
+            return {"status": "ok", "exchange": "lighter", "already_flat": True}
+        base_amount = size_to_int(abs(pos.size), self.market.size_decimals)
+        if base_amount <= 0:
+            raise RuntimeError("Lighter close size rounded to zero")
+        client_index = self._next_client_order_index()
+        tx, response, err = self._run(
+            self.client.create_market_order_limited_slippage(
+                market_index=self.market_id,
+                client_order_index=client_index,
+                base_amount=base_amount,
+                max_slippage=self.cfg.max_slippage,
+                is_ask=pos.size > 0,
+                reduce_only=True,
+                api_key_index=self.api_key_index,
+            )
+        )
+        return self._write_result(tx, response, err, "close_market")
+
+    def _trigger(self, position_size: float, trigger_price: float, kind: str) -> int:
+        is_ask = position_size > 0
+        base_amount = size_to_int(abs(position_size), self.market.size_decimals)
+        if base_amount <= 0:
+            raise RuntimeError("Lighter protection size rounded to zero")
+
+        trigger_int = price_to_int(trigger_price, self.market.price_decimals)
+        slip = Decimal(str(self.cfg.max_slippage))
+        px = Decimal(str(trigger_price)) * (Decimal("1") - slip if is_ask else Decimal("1") + slip)
+        price_int = price_to_int(px, self.market.price_decimals)
+        client_index = self._next_client_order_index()
+
+        fn = self.client.create_sl_order if kind == "sl" else self.client.create_tp_order
+        tx, response, err = self._run(
+            fn(
+                market_index=self.market_id,
+                client_order_index=client_index,
+                base_amount=base_amount,
+                trigger_price=trigger_int,
+                price=price_int,
+                is_ask=is_ask,
+                reduce_only=True,
+                api_key_index=self.api_key_index,
+            )
+        )
+        self._write_result(tx, response, err, f"create_{kind}")
+        return self._find_order_index(client_index)
+
+    def place_protection(self, position_size: float, tp: float, sl: float):
+        # Stop first: if TP creation fails, the position still has native
+        # downside protection and the next bot iteration can recover it.
+        sl_oid = self._trigger(position_size, sl, "sl")
+        try:
+            tp_oid = self._trigger(position_size, tp, "tp")
+        except Exception:
+            log.exception("Lighter TP placement failed; keeping SL order_index=%s", sl_oid)
+            raise
+        return tp_oid, sl_oid
+
+    def update_tp(self, position_size: float, old_tp_oid: Optional[int], tp: float):
+        # Create replacement first so a transient cancel failure never leaves
+        # the live position without a TP.
+        new_oid = self._trigger(position_size, tp, "tp")
+        if old_tp_oid is not None and int(old_tp_oid) != int(new_oid):
+            self.cancel_oid(old_tp_oid)
+        return new_oid
+
+    def cancel_oid(self, oid: Optional[int]) -> None:
+        if oid is None:
+            return
+        try:
+            tx, response, err = self._run(
+                self.client.cancel_order(
+                    market_index=self.market_id,
+                    order_index=int(oid),
+                    api_key_index=self.api_key_index,
+                )
+            )
+            self._write_result(tx, response, err, "cancel_order")
+        except Exception as exc:
+            log.warning("Lighter cancel order_index=%s failed: %s", oid, exc)
+
+    def cancel_all_protection(self) -> None:
+        for order in self._active_orders():
+            if not bool(getattr(order, "reduce_only", False)):
+                continue
+            typ = str(getattr(order, "type", ""))
+            if typ in {"stop-loss", "stop-loss-limit", "take-profit", "take-profit-limit"}:
+                self.cancel_oid(int(order.order_index))
+
+    def recover_protection(self):
+        tp_oid = tp_px = sl_oid = sl_px = None
+        for order in self._active_orders():
+            if not bool(getattr(order, "reduce_only", False)):
+                continue
+            typ = str(getattr(order, "type", ""))
+            trigger = getattr(order, "trigger_price", None)
+            if trigger in (None, ""):
+                continue
+            if typ in {"take-profit", "take-profit-limit"} and tp_px is None:
+                tp_oid, tp_px = int(order.order_index), float(trigger)
+            elif typ in {"stop-loss", "stop-loss-limit"} and sl_px is None:
+                sl_oid, sl_px = int(order.order_index), float(trigger)
+        return tp_oid, tp_px, sl_oid, sl_px
+
+
+
 class OKXExecutor(BaseExecutor):
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -332,5 +568,10 @@ class OKXExecutor(BaseExecutor):
 
 
 def build_executor(cfg: Config) -> BaseExecutor:
-    if cfg.dry_run: return DryRunExecutor(cfg)
-    return OKXExecutor(cfg) if cfg.exchange == "okx" else HyperliquidExecutor(cfg)
+    if cfg.dry_run:
+        return DryRunExecutor(cfg)
+    if cfg.exchange == "okx":
+        return OKXExecutor(cfg)
+    if cfg.exchange == "lighter":
+        return LighterExecutor(cfg)
+    return HyperliquidExecutor(cfg)
