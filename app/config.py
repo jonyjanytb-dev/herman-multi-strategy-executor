@@ -87,6 +87,24 @@ class Config:
     streak_tp_r: float
     streak_invalid_target_policy: str
 
+    aw_swing_length: int
+    aw_max_liquidity: int
+    aw_use_htf_liquidity: bool
+    aw_htf_minutes: int
+    aw_htf_pivot_strength: int
+    aw_use_pdhl: bool
+    aw_atr_length: int
+    aw_displacement_mult: float
+    aw_max_bars_to_mss: int
+    aw_fvg_search_window: int
+    aw_max_bars_to_entry: int
+    aw_use_asia: bool
+    aw_use_london: bool
+    aw_use_nyam: bool
+    aw_use_nypm: bool
+    aw_target_mode: str
+    aw_target_r: float
+
     @classmethod
     def load(cls) -> "Config":
         load_dotenv()
@@ -146,13 +164,30 @@ class Config:
             streak_tp_mode=_text("STREAK_TP_MODE", "r_multiple").lower(),
             streak_tp_r=_float("STREAK_TP_R", 1.0),
             streak_invalid_target_policy=_text("STREAK_INVALID_TARGET_POLICY", "use_r").lower(),
+            aw_swing_length=_int("AW_SWING_LENGTH", 3),
+            aw_max_liquidity=_int("AW_MAX_LIQUIDITY", 15),
+            aw_use_htf_liquidity=_bool("AW_USE_HTF_LIQUIDITY", True),
+            aw_htf_minutes=_int("AW_HTF_MINUTES", 15),
+            aw_htf_pivot_strength=_int("AW_HTF_PIVOT_STRENGTH", 2),
+            aw_use_pdhl=_bool("AW_USE_PDHL", True),
+            aw_atr_length=_int("AW_ATR_LENGTH", 2),
+            aw_displacement_mult=_float("AW_DISPLACEMENT_MULT", 1.0),
+            aw_max_bars_to_mss=_int("AW_MAX_BARS_TO_MSS", 30),
+            aw_fvg_search_window=_int("AW_FVG_SEARCH_WINDOW", 1),
+            aw_max_bars_to_entry=_int("AW_MAX_BARS_TO_ENTRY", 10),
+            aw_use_asia=_bool("AW_USE_ASIA", True),
+            aw_use_london=_bool("AW_USE_LONDON", True),
+            aw_use_nyam=_bool("AW_USE_NYAM", True),
+            aw_use_nypm=_bool("AW_USE_NYPM", False),
+            aw_target_mode=_text("AW_TARGET_MODE", "opposite_liquidity").lower(),
+            aw_target_r=_float("AW_TARGET_R", 1.0),
         )
         cfg.validate()
         return cfg
 
     def validate(self) -> None:
-        if self.strategy not in {"trend_rebalance", "streak_failure"}:
-            raise ValueError("STRATEGY must be trend_rebalance or streak_failure")
+        if self.strategy not in {"trend_rebalance", "streak_failure", "aw_liquidity"}:
+            raise ValueError("STRATEGY must be trend_rebalance, streak_failure, or aw_liquidity")
         if self.exchange not in {"hyperliquid", "okx"}:
             raise ValueError("EXCHANGE must be hyperliquid or okx")
         if self.interval != "1m":
@@ -183,6 +218,28 @@ class Config:
             raise ValueError("STREAK_TP_MODE invalid")
         if self.streak_invalid_target_policy not in {"use_r", "skip"}:
             raise ValueError("STREAK_INVALID_TARGET_POLICY invalid")
+        if self.aw_swing_length < 2:
+            raise ValueError("AW_SWING_LENGTH must be >= 2")
+        if not 5 <= self.aw_max_liquidity <= 40:
+            raise ValueError("AW_MAX_LIQUIDITY must be between 5 and 40")
+        if self.aw_htf_minutes <= 1:
+            raise ValueError("AW_HTF_MINUTES must be > 1")
+        if self.aw_htf_pivot_strength < 1:
+            raise ValueError("AW_HTF_PIVOT_STRENGTH must be >= 1")
+        if self.aw_atr_length < 1:
+            raise ValueError("AW_ATR_LENGTH must be >= 1")
+        if self.aw_displacement_mult <= 0:
+            raise ValueError("AW_DISPLACEMENT_MULT must be > 0")
+        if self.aw_max_bars_to_mss < 3:
+            raise ValueError("AW_MAX_BARS_TO_MSS must be >= 3")
+        if not 0 <= self.aw_fvg_search_window <= 5:
+            raise ValueError("AW_FVG_SEARCH_WINDOW must be between 0 and 5")
+        if self.aw_max_bars_to_entry < 3:
+            raise ValueError("AW_MAX_BARS_TO_ENTRY must be >= 3")
+        if self.aw_target_mode not in {"opposite_liquidity", "fixed_r"}:
+            raise ValueError("AW_TARGET_MODE must be opposite_liquidity or fixed_r")
+        if self.aw_target_r < 0.5:
+            raise ValueError("AW_TARGET_R must be >= 0.5")
         if self.exchange == "hyperliquid":
             if self.network not in {"mainnet", "testnet"}:
                 raise ValueError("NETWORK must be mainnet or testnet")
@@ -220,4 +277,9 @@ class Config:
 
     @property
     def strategy_label(self) -> str:
-        return "1.0 Trend Rebalance Map" if self.strategy == "trend_rebalance" else "1.1 Streak Failure Reversal"
+        labels = {
+            "trend_rebalance": "1.0 Trend Rebalance Map",
+            "streak_failure": "1.1 Streak Failure Reversal",
+            "aw_liquidity": "1.2 AW Liquidity Reversal",
+        }
+        return labels[self.strategy]
