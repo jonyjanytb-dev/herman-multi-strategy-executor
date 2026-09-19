@@ -177,6 +177,7 @@ def test_lighter_market_data_accepts_selected_interval(monkeypatch):
 
 def test_lighter_signer_client_is_constructed_inside_running_loop(monkeypatch):
     base_env(monkeypatch)
+    monkeypatch.setattr("app.executor.time.time", lambda: 1_789_798_767.312)
     monkeypatch.setenv("DRY_RUN", "false")
     monkeypatch.setenv("LIGHTER_ACCOUNT_INDEX", "123")
     monkeypatch.setenv("LIGHTER_API_KEY_INDEX", "3")
@@ -218,5 +219,15 @@ def test_lighter_signer_client_is_constructed_inside_running_loop(monkeypatch):
         assert executor.market_id == 1
         assert executor.account_index == 123
         assert executor.api_key_index == 3
+        assert executor._client_order_index == 1_789_798_767_312
+        assert executor._next_client_order_index() <= 281_474_976_710_655
     finally:
         executor.loop.close()
+
+
+def test_lighter_client_order_index_refuses_protocol_overflow():
+    executor = object.__new__(LighterExecutor)
+    executor._client_order_index = 281_474_976_710_655
+
+    with pytest.raises(RuntimeError, match="exhausted"):
+        executor._next_client_order_index()

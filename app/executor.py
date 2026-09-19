@@ -15,6 +15,7 @@ from .okx_client import OKXAPIError, OKXClient
 log = logging.getLogger(__name__)
 PERP_MAX_DECIMALS = 6
 PRICE_SIGNIFICANT_FIGURES = 5
+LIGHTER_MAX_CLIENT_ORDER_INDEX = (1 << 48) - 1
 
 
 @dataclass(frozen=True)
@@ -236,7 +237,10 @@ class LighterExecutor(BaseExecutor):
         if err is not None:
             raise RuntimeError(f"Lighter API key validation failed: {err}")
 
-        self._client_order_index = int(time.time() * 1_000_000)
+        # Lighter signs ClientOrderIndex as an unsigned 48-bit value. A Unix
+        # microsecond timestamp already exceeds that range; milliseconds stay
+        # unique enough for this synchronous executor and fit for millennia.
+        self._client_order_index = int(time.time() * 1_000)
         if cfg.leverage > 0:
             _, _, err = self._run(
                 self.client.update_leverage(
@@ -265,6 +269,8 @@ class LighterExecutor(BaseExecutor):
         return self.loop.run_until_complete(awaitable)
 
     def _next_client_order_index(self) -> int:
+        if self._client_order_index >= LIGHTER_MAX_CLIENT_ORDER_INDEX:
+            raise RuntimeError("Lighter client order index range exhausted")
         self._client_order_index += 1
         return self._client_order_index
 
